@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Radio C3 Remote</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
+        .dial-container { width: 250px; height: 250px; border: 8px solid #3498db; border-radius: 50%; margin: 20px auto; position: relative; display: flex; align-items: center; justify-content: center; }
+        #freq { font-size: 48px; font-weight: bold; color: #3498db; }
+        .btn { background: #3498db; border: none; color: white; padding: 15px 30px; border-radius: 25px; margin: 10px; font-size: 18px; }
+        input[type=range] { width: 80%; margin: 20px; }
+        #station-list { background: #1e1e1e; padding: 10px; border-radius: 10px; min-height: 50px; }
+    </style>
+</head>
+<body>
+    <h2>Radio Remote</h2>
+    <button class="btn" onclick="connectBLE()">Connect Radio</button>
+    
+    <div class="dial-container" id="dial">
+        <div><span id="freq">88.4</span><br><small>MHz</small></div>
+    </div>
+
+    <button class="btn" onclick="sendCommand('SCAN')">Start Scan</button>
+    
+    <div id="station-list">Radio List: Waiting...</div>
+    
+    <p>Volume</p>
+    <input type="range" min="0" max="12" value="1" oninput="sendCommand('V:'+this.value)">
+
+    <script>
+        let charac;
+        async function connectBLE() {
+            const device = await navigator.bluetooth.requestDevice({
+                filters: [{ services: ['4fafc201-1fb5-459e-8fcc-c5c9c331914b'] }]
+            });
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService('4fafc201-1fb5-459e-8fcc-c5c9c331914b');
+            charac = await service.getCharacteristic('beb5483e-36e1-4688-b7f5-ea07361b26a8');
+            charac.startNotifications();
+            charac.addEventListener('characteristicvaluechanged', handleData);
+            alert("Connected!");
+        }
+
+        function handleData(event) {
+            let val = new TextDecoder().decode(event.target.value);
+            if(val.startsWith("ST:")) {
+                let parts = val.split("|");
+                document.getElementById('freq').innerText = parts[0].substring(3);
+                if(navigator.vibrate) navigator.vibrate(30); // Getar HP
+            } else if(val.startsWith("LS:")) {
+                document.getElementById('station-list').innerHTML = val.substring(3).split(',').map(f => `<button onclick="sendCommand('F:'+${f*100})">${f}</button>`).join(' ');
+            }
+        }
+
+        async function sendCommand(cmd) {
+            if(charac) charac.writeValue(new TextEncoder().encode(cmd));
+        }
+    </script>
+</body>
+</html>
