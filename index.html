@@ -1,59 +1,142 @@
 <!DOCTYPE html>
-<html>
+<html lang="id">
 <head>
-    <title>Radio C3 Remote</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimalist FM Radio</title>
     <style>
-        body { font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
-        .dial-container { width: 250px; height: 250px; border: 8px solid #3498db; border-radius: 50%; margin: 20px auto; position: relative; display: flex; align-items: center; justify-content: center; }
-        #freq { font-size: 48px; font-weight: bold; color: #3498db; }
-        .btn { background: #3498db; border: none; color: white; padding: 15px 30px; border-radius: 25px; margin: 10px; font-size: 18px; }
-        input[type=range] { width: 80%; margin: 20px; }
-        #station-list { background: #1e1e1e; padding: 10px; border-radius: 10px; min-height: 50px; }
+        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(180deg, #7c354e 0%, #4a1d2d 100%); color: white; height: 100vh; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 40px 20px; box-sizing: border-box; overflow: hidden; }
+        
+        #status-bar { font-size: 12px; opacity: 0.6; position: absolute; top: 10px; }
+        .connect-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 20px; border-radius: 20px; cursor: pointer; }
+
+        /* Frequency Main Display */
+        .freq-container { text-align: center; margin-top: 50px; }
+        #big-freq { font-size: 100px; font-weight: 300; margin: 0; letter-spacing: -2px; }
+        
+        /* Visualizer (Decoration) */
+        .visualizer { height: 60px; display: flex; align-items: center; gap: 4px; opacity: 0.3; margin: 20px 0; }
+        .bar { width: 3px; background: white; border-radius: 2px; animation: pulse 1.5s infinite ease-in-out; }
+        @keyframes pulse { 0%, 100% { height: 10px; } 50% { height: 40px; } }
+
+        /* RDS Section */
+        .info-container { text-align: center; }
+        .fm-label { font-size: 24px; font-weight: 400; margin: 0; }
+        #rds-text { font-size: 18px; opacity: 0.8; color: #ffcdd2; margin-top: 5px; height: 24px; }
+
+        /* Tuner Ruler */
+        .tuner-container { width: 100%; position: relative; overflow: hidden; height: 100px; display: flex; flex-direction: column; align-items: center; }
+        .ruler { display: flex; align-items: flex-end; gap: 15px; transition: 0.3s ease; }
+        .mark { width: 1px; background: rgba(255,255,255,0.4); height: 20px; }
+        .mark.long { height: 40px; background: rgba(255,255,255,0.8); position: relative; }
+        .mark.long::after { content: attr(data-val); position: absolute; bottom: -25px; left: -10px; font-size: 12px; }
+        .pointer { width: 2px; height: 60px; background: #ff4081; position: absolute; z-index: 10; top: 0; box-shadow: 0 0 10px #ff4081; }
+
+        /* Volume Slider */
+        .vol-slider { width: 80%; -webkit-appearance: none; background: rgba(255,255,255,0.2); height: 4px; border-radius: 2px; margin-top: 30px; }
+        .vol-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; background: white; border-radius: 50%; cursor: pointer; }
+
+        .scan-btn { margin-top: 20px; background: none; border: 1px solid white; color: white; padding: 10px 30px; border-radius: 25px; cursor: pointer; opacity: 0.7; }
     </style>
 </head>
 <body>
-    <h2>Radio Remote</h2>
-    <button class="btn" onclick="connectBLE()">Connect Radio</button>
-    
-    <div class="dial-container" id="dial">
-        <div><span id="freq">88.4</span><br><small>MHz</small></div>
+
+    <div id="status-bar">Bluetooth: Terputus</div>
+    <button class="connect-btn" onclick="connectBLE()">Hubungkan Radio</button>
+
+    <div class="freq-container">
+        <h1 id="big-freq">88.4</h1>
+        <div class="visualizer" id="viz"></div>
     </div>
 
-    <button class="btn" onclick="sendCommand('SCAN')">Start Scan</button>
+    <div class="info-container">
+        <p class="fm-label">FM Radio</p>
+        <div id="rds-text">[Mencari RDS...]</div>
+    </div>
+
+    <div class="tuner-container">
+        <div class="pointer"></div>
+        <div class="ruler" id="ruler">
+            <!-- Markings akan diisi via JS -->
+        </div>
+    </div>
+
+    <input type="range" class="vol-slider" min="0" max="12" value="1" onchange="sendCommand('V:'+this.value)">
     
-    <div id="station-list">Radio List: Waiting...</div>
-    
-    <p>Volume</p>
-    <input type="range" min="0" max="12" value="1" oninput="sendCommand('V:'+this.value)">
+    <button class="scan-btn" onclick="sendCommand('SCAN')">Mulai Auto Scan</button>
 
     <script>
-        let charac;
+        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+        const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+        let radioChar;
+        let isConnected = false;
+
+        // Generate Tuner Ruler
+        const ruler = document.getElementById('ruler');
+        for(let i=87; i<=108; i++) {
+            let mark = document.createElement('div');
+            mark.className = 'mark long';
+            mark.setAttribute('data-val', i);
+            ruler.appendChild(mark);
+            for(let j=0; j<4; j++) {
+                let smallMark = document.createElement('div');
+                smallMark.className = 'mark';
+                ruler.appendChild(smallMark);
+            }
+        }
+
+        // Visualizer Bars
+        const viz = document.getElementById('viz');
+        for(let i=0; i<30; i++) {
+            let bar = document.createElement('div');
+            bar.className = 'bar';
+            bar.style.animationDelay = (i * 0.05) + 's';
+            viz.appendChild(bar);
+        }
+
         async function connectBLE() {
-            const device = await navigator.bluetooth.requestDevice({
-                filters: [{ services: ['4fafc201-1fb5-459e-8fcc-c5c9c331914b'] }]
-            });
-            const server = await device.gatt.connect();
-            const service = await server.getPrimaryService('4fafc201-1fb5-459e-8fcc-c5c9c331914b');
-            charac = await service.getCharacteristic('beb5483e-36e1-4688-b7f5-ea07361b26a8');
-            charac.startNotifications();
-            charac.addEventListener('characteristicvaluechanged', handleData);
-            alert("Connected!");
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    acceptAllDevices: true,
+                    optionalServices: [SERVICE_UUID]
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                radioChar = await service.getCharacteristic(CHARACTERISTIC_UUID);
+                await radioChar.startNotifications();
+                radioChar.addEventListener('characteristicvaluechanged', handleData);
+                
+                isConnected = true;
+                document.getElementById('status-bar').innerText = "Terhubung: " + device.name;
+                if(navigator.vibrate) navigator.vibrate(50);
+            } catch (e) { console.log(e); }
         }
 
         function handleData(event) {
             let val = new TextDecoder().decode(event.target.value);
+            
+            // Sync Frekuensi & RSSI
             if(val.startsWith("ST:")) {
-                let parts = val.split("|");
-                document.getElementById('freq').innerText = parts[0].substring(3);
-                if(navigator.vibrate) navigator.vibrate(30); // Getar HP
-            } else if(val.startsWith("LS:")) {
-                document.getElementById('station-list').innerHTML = val.substring(3).split(',').map(f => `<button onclick="sendCommand('F:'+${f*100})">${f}</button>`).join(' ');
+                let f = val.substring(3).split("|")[0];
+                document.getElementById('big-freq').innerText = f;
+                
+                // Geser Ruler (Logika sederhana)
+                let offset = (parseFloat(f) - 87) * -85; 
+                document.getElementById('ruler').style.transform = `translateX(${offset + 140}px)`;
+                
+                if(navigator.vibrate) navigator.vibrate(20);
+            }
+
+            // Sync RDS
+            if(val.startsWith("RDS:")) {
+                document.getElementById('rds-text').innerText = val.substring(4);
             }
         }
 
         async function sendCommand(cmd) {
-            if(charac) charac.writeValue(new TextEncoder().encode(cmd));
+            if(isConnected && radioChar) {
+                radioChar.writeValue(new TextEncoder().encode(cmd));
+            }
         }
     </script>
 </body>
