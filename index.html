@@ -3,23 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Interactive FM Radio</title>
+    <title>Smooth FM Radio</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(180deg, #7c354e 0%, #4a1d2d 100%); color: white; height: 100vh; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 40px 0; box-sizing: border-box; overflow: hidden; }
-        .connect-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 20px; border-radius: 20px; cursor: pointer; z-index: 100; }
-        #big-freq { font-size: 100px; font-weight: 300; margin: 0; letter-spacing: -2px; }
+        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(180deg, #7c354e 0%, #4a1d2d 100%); color: white; height: 100vh; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 40px 0; box-sizing: border-box; overflow: hidden; touch-action: none; }
+        .connect-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 20px; border-radius: 20px; cursor: pointer; z-index: 100; font-size: 14px; }
+        #big-freq { font-size: 100px; font-weight: 300; margin: 0; letter-spacing: -2px; transition: color 0.3s; }
+        #big-freq.sending { color: #ff4081; } /* Warna berubah saat mengirim data */
         .fm-label { font-size: 24px; opacity: 0.9; margin: 0; }
-        #rds-text { font-size: 18px; color: #ffcdd2; margin-top: 5px; height: 24px; min-width: 200px; }
+        #rds-text { font-size: 18px; color: #ffcdd2; margin-top: 5px; height: 24px; text-align: center; }
 
-        /* INTERACTIVE TUNER */
-        .tuner-outer { width: 100%; height: 120px; position: relative; cursor: grab; }
-        .pointer { width: 3px; height: 70px; background: #ff4081; position: absolute; left: 50%; top: 0; transform: translateX(-50%); z-index: 20; box-shadow: 0 0 15px #ff4081; }
+        /* TUNER RULER */
+        .tuner-outer { width: 100%; height: 150px; position: relative; display: flex; align-items: center; cursor: grab; user-select: none; }
+        .pointer { width: 3px; height: 80px; background: #ff4081; position: absolute; left: 50%; top: 0; transform: translateX(-50%); z-index: 20; box-shadow: 0 0 15px #ff4081; }
         .tuner-scroll { display: flex; align-items: flex-end; position: absolute; left: 50%; height: 80px; gap: 20px; will-change: transform; transition: transform 0.1s ease-out; }
         .mark { width: 2px; background: rgba(255,255,255,0.3); height: 25px; flex-shrink: 0; }
         .mark.long { height: 50px; background: rgba(255,255,255,0.8); position: relative; }
         .mark.long::after { content: attr(data-val); position: absolute; bottom: -30px; left: 50%; transform: translateX(-50%); font-size: 14px; }
 
-        .vol-slider { width: 70%; margin: 20px 0; }
+        .vol-slider { width: 70%; margin: 20px 0; accent-color: #ff4081; }
         .scan-btn { background: none; border: 1px solid white; color: white; padding: 10px 30px; border-radius: 25px; cursor: pointer; opacity: 0.7; }
     </style>
 </head>
@@ -36,7 +37,7 @@
     <div class="tuner-outer" id="tunerBox">
         <div class="pointer"></div>
         <div class="tuner-scroll" id="tunerScroll">
-            <!-- Isi Ruler -->
+            <!-- Skala Otomatis -->
         </div>
     </div>
 
@@ -49,10 +50,11 @@
         let radioChar;
         let isConnected = false;
         let currentFreq = 88.4;
+        let targetFreq = 88.4;
+        let sendTimeout = null; // Timer delay 1 detik
+        const gap = 22; 
 
-        // Build Ruler
         const scroll = document.getElementById('tunerScroll');
-        const gap = 22; // px per 0.1 MHz
         for(let i=870; i<=1080; i++) {
             let m = document.createElement('div');
             m.className = (i % 10 == 0) ? 'mark long' : 'mark';
@@ -66,25 +68,45 @@
             scroll.style.transform = `translateX(${offset}px)`;
         }
 
-        // Touch/Swipe Logic
-        let isDragging = false, startX, startScroll;
+        let isDragging = false, startX, baseFreq;
         const tunerBox = document.getElementById('tunerBox');
 
-        tunerBox.addEventListener('touchstart', e => { isDragging = true; startX = e.touches[0].pageX; });
-        tunerBox.addEventListener('touchmove', e => {
-            if(!isDragging) return;
-            let x = e.touches[0].pageX;
-            let diff = (startX - x) / gap / 10;
-            let newFreq = Math.min(108, Math.max(87.5, currentFreq + diff));
-            updateTunerUI(newFreq);
-            if(Math.abs(currentFreq - newFreq) >= 0.1) {
-                currentFreq = Math.round(newFreq * 10) / 10;
-                sendCommand("F:" + Math.round(currentFreq * 100));
-                if(navigator.vibrate) navigator.vibrate(20);
-                startX = x;
-            }
+        tunerBox.addEventListener('pointerdown', e => { 
+            isDragging = true; 
+            startX = e.clientX; 
+            baseFreq = targetFreq;
+            tunerBox.setPointerCapture(e.pointerId);
+            clearTimeout(sendTimeout); // Hapus timer jika mulai geser lagi
+            document.getElementById('big-freq').classList.remove('sending');
         });
-        tunerBox.addEventListener('touchend', () => isDragging = false);
+
+        tunerBox.addEventListener('pointermove', e => {
+            if(!isDragging) return;
+            let x = e.clientX;
+            let diff = (startX - x) / gap / 10;
+            let newFreq = baseFreq + diff;
+
+            // Wrapping 87.5 - 108.0
+            if (newFreq > 108.0) newFreq = 87.5;
+            if (newFreq < 87.5) newFreq = 108.0;
+
+            targetFreq = Math.round(newFreq * 10) / 10;
+            updateTunerUI(targetFreq);
+            
+            if(navigator.vibrate) navigator.vibrate(10); // Klik getar tipis
+        });
+
+        tunerBox.addEventListener('pointerup', () => { 
+            isDragging = false; 
+            // Mulai Timer 1 Detik setelah berhenti geser
+            clearTimeout(sendTimeout);
+            sendTimeout = setTimeout(() => {
+                currentFreq = targetFreq;
+                sendCommand("F:" + Math.round(currentFreq * 100));
+                document.getElementById('big-freq').classList.add('sending');
+                setTimeout(() => document.getElementById('big-freq').classList.remove('sending'), 500);
+            }, 1000);
+        });
 
         async function connectBLE() {
             try {
@@ -96,14 +118,16 @@
                 radioChar.addEventListener('characteristicvaluechanged', e => {
                     let val = new TextDecoder().decode(e.target.value);
                     if(val.startsWith("ST:")) {
-                        let f = parseFloat(val.substring(3).split("|")[0]);
-                        if(!isDragging) { currentFreq = f; updateTunerUI(f); }
+                        let f = parseFloat(val.substring(3).split("|"));
+                        if(!isDragging && !sendTimeout) { 
+                            currentFreq = f; targetFreq = f; updateTunerUI(f); 
+                        }
                     }
                     if(val.startsWith("RDS:")) document.getElementById('rds-text').innerText = val.substring(4);
                 });
                 isConnected = true;
-                document.getElementById('conBtn').innerText = "Connected";
-            } catch (e) { alert(e); }
+                document.getElementById('conBtn').innerText = "Terhubung";
+            } catch (e) { console.log(e); }
         }
 
         async function sendCommand(cmd) { if(isConnected && radioChar) radioChar.writeValue(new TextEncoder().encode(cmd)); }
